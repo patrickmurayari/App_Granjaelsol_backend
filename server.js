@@ -1,6 +1,8 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+
+ const pool = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -27,6 +29,20 @@ app.get('/health', (req, res) => {
   });
 });
 
+ // Productos
+ app.get('/api/productos', async (req, res, next) => {
+   try {
+     const result = await pool.query('SELECT * FROM productos');
+     res.status(200).json(result.rows);
+   } catch (err) {
+     console.error('Error al consultar productos:', err);
+     res.status(503).json({
+       error: 'No se pudo conectar con la base de datos',
+       mensaje: 'Intenta nuevamente más tarde'
+     });
+   }
+ });
+
 // Manejo de rutas no encontradas
 app.use((req, res) => {
   res.status(404).json({
@@ -49,3 +65,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor de Granja El Sol escuchando en puerto ${PORT}`);
   console.log(`📍 Accede a: http://localhost:${PORT}`);
 });
+
+
+module.exports = app;
