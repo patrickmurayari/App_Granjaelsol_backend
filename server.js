@@ -32,7 +32,9 @@ app.get('/health', (req, res) => {
  // Productos
  app.get('/api/productos', async (req, res, next) => {
    try {
-     const result = await pool.query('SELECT * FROM productos');
+     const result = await pool.query(
+       'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad FROM productos'
+     );
      res.status(200).json(result.rows);
    } catch (err) {
      console.error('Error al consultar productos:', err);
@@ -43,60 +45,92 @@ app.get('/health', (req, res) => {
    }
  });
 
- // Actualizar producto (precio y/o otros campos)
- app.put('/api/productos/:id', async (req, res) => {
-   const { id } = req.params;
-   const { precio, stock, nombre, descripcion, categoria, imagen_url } = req.body || {};
+// Actualizar producto (precio y/o otros campos)
+app.put('/api/productos/:id', async (req, res) => {
+  const { id } = req.params;
+  const { precio, stock, nombre, descripcion, categoria, imagen_url, peso_promedio_unidad } = req.body || {};
 
-   const setParts = [];
-   const values = [];
+  const setParts = [];
+  const values = [];
 
-   const allowedFields = {
-     precio,
-     stock,
-     nombre,
-     descripcion,
-     categoria,
-     imagen_url,
-   };
+  const allowedFields = {
+    precio,
+    stock,
+    nombre,
+    descripcion,
+    categoria,
+    imagen_url,
+    peso_promedio_unidad,
+  };
 
-   for (const [field, value] of Object.entries(allowedFields)) {
-     if (value !== undefined) {
-       values.push(value);
-       setParts.push(`${field} = $${values.length}`);
-     }
-   }
+  for (const [field, value] of Object.entries(allowedFields)) {
+    if (value !== undefined) {
+      values.push(value);
+      setParts.push(`${field} = $${values.length}`);
+    }
+  }
 
-   if (!id) {
-     return res.status(400).json({ error: 'ID inválido' });
-   }
+  if (!id) {
+    return res.status(400).json({ error: 'ID inválido' });
+  }
 
-   if (setParts.length === 0) {
-     return res.status(400).json({
-       error: 'No se enviaron campos para actualizar',
-       mensaje: 'Envía al menos precio, stock, nombre, descripcion, categoria o imagen_url'
-     });
-   }
+  if (setParts.length === 0) {
+    return res.status(400).json({
+      error: 'No se enviaron campos para actualizar',
+      mensaje: 'Envía al menos precio, stock, nombre, descripcion, categoria o imagen_url'
+    });
+  }
 
-   values.push(id);
-   const query = `UPDATE productos SET ${setParts.join(', ')} WHERE id = $${values.length} RETURNING *`;
+  values.push(id);
+  const query = `UPDATE productos SET ${setParts.join(', ')} WHERE id = $${values.length} RETURNING *`;
 
-   try {
-     const result = await pool.query(query, values);
+  try {
+    const result = await pool.query(query, values);
 
-     if (result.rowCount === 0) {
-       return res.status(404).json({ error: 'Producto no encontrado' });
-     }
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Producto no encontrado' });
+    }
 
-     return res.status(200).json(result.rows[0]);
-   } catch (err) {
-     console.error('Error al actualizar producto:', err);
-     return res.status(503).json({
-       error: 'No se pudo actualizar el producto',
-       mensaje: 'Intenta nuevamente más tarde'
-     });
-   }
- });
+    return res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error al actualizar producto:', err);
+    return res.status(503).json({
+      error: 'No se pudo actualizar el producto',
+      mensaje: 'Intenta nuevamente más tarde'
+    });
+  }
+});
+
+// Registrar pedido
+app.post('/api/pedidos', async (req, res) => {
+  const { items, total_estimado, total, comentarios } = req.body || {};
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'Items inválidos' });
+  }
+
+  const totalNumber = Number(total_estimado ?? total);
+  if (!Number.isFinite(totalNumber) || totalNumber < 0) {
+    return res.status(400).json({ error: 'Total inválido' });
+  }
+
+  const comentariosStr = comentarios == null ? null : String(comentarios);
+
+  try {
+    const result = await pool.query(
+      "INSERT INTO pedidos (items, total_estimado, comentarios, created_at, estado) VALUES ($1::jsonb, $2, $3, NOW(), 'pendiente') RETURNING *",
+      [JSON.stringify(items), totalNumber, comentariosStr]
+    );
+
+    return res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error al registrar pedido:', err);
+    return res.status(503).json({
+      error: 'No se pudo registrar el pedido',
+      mensaje: 'Intenta nuevamente más tarde'
+    });
+  }
+});
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {
