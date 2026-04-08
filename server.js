@@ -43,6 +43,61 @@ app.get('/health', (req, res) => {
    }
  });
 
+ // Actualizar producto (precio y/o otros campos)
+ app.put('/api/productos/:id', async (req, res) => {
+   const { id } = req.params;
+   const { precio, stock, nombre, descripcion, categoria, imagen_url } = req.body || {};
+
+   const setParts = [];
+   const values = [];
+
+   const allowedFields = {
+     precio,
+     stock,
+     nombre,
+     descripcion,
+     categoria,
+     imagen_url,
+   };
+
+   for (const [field, value] of Object.entries(allowedFields)) {
+     if (value !== undefined) {
+       values.push(value);
+       setParts.push(`${field} = $${values.length}`);
+     }
+   }
+
+   if (!id) {
+     return res.status(400).json({ error: 'ID inválido' });
+   }
+
+   if (setParts.length === 0) {
+     return res.status(400).json({
+       error: 'No se enviaron campos para actualizar',
+       mensaje: 'Envía al menos precio, stock, nombre, descripcion, categoria o imagen_url'
+     });
+   }
+
+   values.push(id);
+   const query = `UPDATE productos SET ${setParts.join(', ')} WHERE id = $${values.length} RETURNING *`;
+
+   try {
+     const result = await pool.query(query, values);
+
+     if (result.rowCount === 0) {
+       return res.status(404).json({ error: 'Producto no encontrado' });
+     }
+
+     return res.status(200).json(result.rows[0]);
+   } catch (err) {
+     console.error('Error al actualizar producto:', err);
+     return res.status(503).json({
+       error: 'No se pudo actualizar el producto',
+       mensaje: 'Intenta nuevamente más tarde'
+     });
+   }
+ });
+
 // Manejo de rutas no encontradas
 app.use((req, res) => {
   res.status(404).json({
