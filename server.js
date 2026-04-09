@@ -33,7 +33,7 @@ app.get('/health', (req, res) => {
  app.get('/api/productos', async (req, res, next) => {
    try {
      const result = await pool.query(
-       'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad FROM productos'
+       'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible FROM productos'
      );
      res.status(200).json(result.rows);
    } catch (err) {
@@ -48,7 +48,7 @@ app.get('/health', (req, res) => {
 // Actualizar producto (precio y/o otros campos)
 app.put('/api/productos/:id', async (req, res) => {
   const { id } = req.params;
-  const { precio, stock, nombre, descripcion, categoria, imagen_url, peso_promedio_unidad } = req.body || {};
+  const { precio, stock, nombre, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible } = req.body || {};
 
   const setParts = [];
   const values = [];
@@ -61,6 +61,7 @@ app.put('/api/productos/:id', async (req, res) => {
     categoria,
     imagen_url,
     peso_promedio_unidad,
+    disponible,
   };
 
   for (const [field, value] of Object.entries(allowedFields)) {
