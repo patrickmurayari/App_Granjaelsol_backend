@@ -2,7 +2,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 
- const pool = require('./db');
+const pool = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -29,21 +29,21 @@ app.get('/health', (req, res) => {
   });
 });
 
- // Productos
- app.get('/api/productos', async (req, res, next) => {
-   try {
-     const result = await pool.query(
-       'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible FROM productos'
-     );
-     res.status(200).json(result.rows);
-   } catch (err) {
-     console.error('Error al consultar productos:', err);
-     res.status(503).json({
-       error: 'No se pudo conectar con la base de datos',
-       mensaje: 'Intenta nuevamente más tarde'
-     });
-   }
- });
+// Productos
+app.get('/api/productos', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible FROM productos'
+    );
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error al consultar productos:', err);
+    res.status(503).json({
+      error: 'No se pudo conectar con la base de datos',
+      mensaje: 'Intenta nuevamente más tarde'
+    });
+  }
+});
 
 // Actualizar producto (precio y/o otros campos)
 app.put('/api/productos/:id', async (req, res) => {
@@ -97,6 +97,39 @@ app.put('/api/productos/:id', async (req, res) => {
     console.error('Error al actualizar producto:', err);
     return res.status(503).json({
       error: 'No se pudo actualizar el producto',
+      mensaje: 'Intenta nuevamente más tarde'
+    });
+  }
+});
+
+// Crear nuevo producto
+app.post('/api/productos', async (req, res) => {
+  const { nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad } = req.body || {};
+
+  if (!nombre || nombre.trim() === '') {
+    return res.status(400).json({ error: 'El nombre del producto es obligatorio' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO productos (nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        nombre.trim(),
+        precio === '' ? null : Number(precio) || null,
+        stock === '' ? null : Number(stock) || null,
+        descripcion?.trim() || null,
+        categoria?.trim() || null,
+        imagen_url?.trim() || null,
+        peso_promedio_unidad === '' ? null : Number(peso_promedio_unidad) || null,
+      ]
+    );
+
+    return res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error al crear producto:', err);
+    return res.status(503).json({
+      error: 'No se pudo crear el producto',
       mensaje: 'Intenta nuevamente más tarde'
     });
   }
@@ -179,34 +212,66 @@ app.put('/api/pedidos/:id', async (req, res) => {
   }
 });
 
-// Crear nuevo producto
-app.post('/api/productos', async (req, res) => {
-  const { nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad } = req.body || {};
-
-  if (!nombre || nombre.trim() === '') {
-    return res.status(400).json({ error: 'El nombre del producto es obligatorio' });
-  }
+// Obtener cierres de caja
+app.get('/api/cierres', async (req, res) => {
+  const { limite = 7 } = req.query;
 
   try {
     const result = await pool.query(
-      `INSERT INTO productos (nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [
-        nombre.trim(),
-        precio === '' ? null : Number(precio) || null,
-        stock === '' ? null : Number(stock) || null,
-        descripcion?.trim() || null,
-        categoria?.trim() || null,
-        imagen_url?.trim() || null,
-        peso_promedio_unidad === '' ? null : Number(peso_promedio_unidad) || null,
-      ]
+      'SELECT id, fecha, monto_efectivo, monto_tarjeta, gastos_diarios, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
+      [Number(limite)]
+    );
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error al consultar cierres:', err);
+    res.status(503).json({
+      error: 'No se pudo conectar con la base de datos',
+      mensaje: 'Intenta nuevamente más tarde'
+    });
+  }
+});
+
+// Crear o actualizar cierre de caja del día
+app.post('/api/cierres', async (req, res) => {
+  const { efectivo, tarjeta, gastos, notas } = req.body || {};
+
+  // Validar campos numéricos
+  const efectivoNum = Number(efectivo) || 0;
+  const tarjetaNum = Number(tarjeta) || 0;
+  const gastosNum = Number(gastos) || 0;
+  const notasStr = notas?.trim() || null;
+
+  // Obtener fecha actual (solo día, sin hora)
+  const hoy = new Date().toISOString().split('T')[0];
+
+  try {
+    // Verificar si ya existe cierre para hoy
+    const existingResult = await pool.query(
+      'SELECT id FROM cierres_caja WHERE fecha = $1',
+      [hoy]
     );
 
-    return res.status(201).json(result.rows[0]);
+    let result;
+
+    if (existingResult.rows.length > 0) {
+      // Actualizar cierre existente
+      result = await pool.query(
+        'UPDATE cierres_caja SET monto_efectivo = $1, monto_tarjeta = $2, gastos_diarios = $3, notas = $4, updated_at = NOW() WHERE fecha = $5 RETURNING *',
+        [efectivoNum, tarjetaNum, gastosNum, notasStr, hoy]
+      );
+    } else {
+      // Crear nuevo cierre
+      result = await pool.query(
+        'INSERT INTO cierres_caja (fecha, monto_efectivo, monto_tarjeta, gastos_diarios, notas, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
+        [hoy, efectivoNum, tarjetaNum, gastosNum, notasStr]
+      );
+    }
+
+    return res.status(200).json(result.rows[0]);
   } catch (err) {
-    console.error('Error al crear producto:', err);
+    console.error('Error al guardar cierre:', err);
     return res.status(503).json({
-      error: 'No se pudo crear el producto',
+      error: 'No se pudo guardar el cierre',
       mensaje: 'Intenta nuevamente más tarde'
     });
   }
@@ -231,9 +296,8 @@ app.use((err, req, res, next) => {
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor de Granja El Sol escuchando en puerto ${PORT}`);
-  console.log(`📍 Accede a: http://localhost:${PORT}`);
+  console.log(`? Servidor de Granja El Sol escuchando en puerto ${PORT}`);
+  console.log(`? Accede a: http://localhost:${PORT}`);
 });
-
 
 module.exports = app;
