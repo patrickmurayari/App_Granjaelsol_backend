@@ -218,7 +218,7 @@ app.get('/api/cierres', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, fecha, monto_efectivo, monto_tarjeta, gastos_diarios, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
+      'SELECT id, fecha, monto_efectivo, monto_tarjeta, gastos_diarios, total_calculado, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
       [Number(limite)]
     );
     res.status(200).json(result.rows);
