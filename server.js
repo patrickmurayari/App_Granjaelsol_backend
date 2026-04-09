@@ -256,7 +256,7 @@ app.post('/api/cierres', async (req, res) => {
     if (existingResult.rows.length > 0) {
       // Actualizar cierre existente
       result = await pool.query(
-        'UPDATE cierres_caja SET monto_efectivo = $1, monto_tarjeta = $2, gastos_diarios = $3, notas = $4, updated_at = NOW() WHERE fecha = $5 RETURNING *',
+        'UPDATE cierres_caja SET monto_efectivo = $1, monto_tarjeta = $2, gastos_diarios = $3, notas = $4, fecha = NOW() WHERE fecha = $5 RETURNING *',
         [efectivoNum, tarjetaNum, gastosNum, notasStr, hoy]
       );
     } else {
