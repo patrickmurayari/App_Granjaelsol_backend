@@ -277,6 +277,41 @@ app.post('/api/cierres', async (req, res) => {
   }
 });
 
+// Actualizar cierre de caja por ID
+app.put('/api/cierres/:id', async (req, res) => {
+  const { id } = req.params;
+  const { efectivo, tarjeta, gastos, notas } = req.body || {};
+
+  // Validar campos numéricos
+  const efectivoNum = Number(efectivo) || 0;
+  const tarjetaNum = Number(tarjeta) || 0;
+  const gastosNum = Number(gastos) || 0;
+  const notasStr = notas?.trim() || null;
+
+  if (!id) {
+    return res.status(400).json({ error: 'ID inválido' });
+  }
+
+  try {
+    const result = await pool.query(
+      'UPDATE cierres_caja SET monto_efectivo = $1, monto_tarjeta = $2, gastos_diarios = $3, notas = $4, fecha = NOW() WHERE id = $5 RETURNING *',
+      [efectivoNum, tarjetaNum, gastosNum, notasStr, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Cierre no encontrado' });
+    }
+
+    return res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error al actualizar cierre:', err);
+    return res.status(503).json({
+      error: 'No se pudo actualizar el cierre',
+      mensaje: 'Intenta nuevamente más tarde'
+    });
+  }
+});
+
 // Manejo de rutas no encontradas
 app.use((req, res) => {
   res.status(404).json({
