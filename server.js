@@ -218,7 +218,7 @@ app.get('/api/cierres', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, fecha, monto_efectivo, monto_tarjeta, gastos_diarios, total_calculado, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
+      'SELECT id, fecha, venta_total_balanza, venta_posnet, venta_transferencias, fondo_inicial, efectivo_final, gastos_del_dia, diferencia_caja, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
       [Number(limite)]
     );
     res.status(200).json(result.rows);
@@ -231,14 +231,24 @@ app.get('/api/cierres', async (req, res) => {
   }
 });
 
-// Crear o actualizar cierre de caja del día
 app.post('/api/cierres', async (req, res) => {
-  const { efectivo, tarjeta, gastos, notas } = req.body || {};
+  const {
+    venta_total_balanza,
+    venta_posnet,
+    venta_transferencias,
+    fondo_inicial,
+    efectivo_final,
+    gastos_del_dia,
+    notas
+  } = req.body || {};
 
-  // Validar campos numéricos
-  const efectivoNum = Number(efectivo) || 0;
-  const tarjetaNum = Number(tarjeta) || 0;
-  const gastosNum = Number(gastos) || 0;
+  // Validar y convertir campos numéricos
+  const ventaBalanza = Number(venta_total_balanza) || 0;
+  const posnet = Number(venta_posnet) || 0;
+  const transferencias = Number(venta_transferencias) || 0;
+  const fondoInicial = Number(fondo_inicial) || 0;
+  const efectivoFinal = Number(efectivo_final) || 0;
+  const gastos = Number(gastos_del_dia) || 0;
   const notasStr = notas?.trim() || null;
 
   // Obtener fecha actual (solo día, sin hora)
@@ -254,16 +264,28 @@ app.post('/api/cierres', async (req, res) => {
     let result;
 
     if (existingResult.rows.length > 0) {
-      // Actualizar cierre existente
+      // Actualizar cierre existente (diferencia_caja se calcula en DB)
       result = await pool.query(
-        'UPDATE cierres_caja SET monto_efectivo = $1, monto_tarjeta = $2, gastos_diarios = $3, notas = $4, fecha = NOW() WHERE fecha = $5 RETURNING *',
-        [efectivoNum, tarjetaNum, gastosNum, notasStr, hoy]
+        `UPDATE cierres_caja SET
+          venta_total_balanza = $1,
+          venta_posnet = $2,
+          venta_transferencias = $3,
+          fondo_inicial = $4,
+          efectivo_final = $5,
+          gastos_del_dia = $6,
+          notas = $7,
+          fecha = NOW()
+        WHERE fecha = $8 RETURNING *`,
+        [ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, notasStr, hoy]
       );
     } else {
-      // Crear nuevo cierre
+      // Crear nuevo cierre (diferencia_caja se calcula automáticamente en DB)
       result = await pool.query(
-        'INSERT INTO cierres_caja (fecha, monto_efectivo, monto_tarjeta, gastos_diarios, notas, created_at) VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *',
-        [hoy, efectivoNum, tarjetaNum, gastosNum, notasStr]
+        `INSERT INTO cierres_caja (
+          fecha, venta_total_balanza, venta_posnet, venta_transferencias,
+          fondo_inicial, efectivo_final, gastos_del_dia, notas, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) RETURNING *`,
+        [hoy, ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, notasStr]
       );
     }
 
@@ -280,12 +302,23 @@ app.post('/api/cierres', async (req, res) => {
 // Actualizar cierre de caja por ID
 app.put('/api/cierres/:id', async (req, res) => {
   const { id } = req.params;
-  const { efectivo, tarjeta, gastos, notas } = req.body || {};
+  const {
+    venta_total_balanza,
+    venta_posnet,
+    venta_transferencias,
+    fondo_inicial,
+    efectivo_final,
+    gastos_del_dia,
+    notas
+  } = req.body || {};
 
-  // Validar campos numéricos
-  const efectivoNum = Number(efectivo) || 0;
-  const tarjetaNum = Number(tarjeta) || 0;
-  const gastosNum = Number(gastos) || 0;
+  // Validar y convertir campos numéricos
+  const ventaBalanza = Number(venta_total_balanza) || 0;
+  const posnet = Number(venta_posnet) || 0;
+  const transferencias = Number(venta_transferencias) || 0;
+  const fondoInicial = Number(fondo_inicial) || 0;
+  const efectivoFinal = Number(efectivo_final) || 0;
+  const gastos = Number(gastos_del_dia) || 0;
   const notasStr = notas?.trim() || null;
 
   if (!id) {
@@ -293,9 +326,19 @@ app.put('/api/cierres/:id', async (req, res) => {
   }
 
   try {
+    // diferencia_caja se calcula automáticamente en la base de datos
     const result = await pool.query(
-      'UPDATE cierres_caja SET monto_efectivo = $1, monto_tarjeta = $2, gastos_diarios = $3, notas = $4, fecha = NOW() WHERE id = $5 RETURNING *',
-      [efectivoNum, tarjetaNum, gastosNum, notasStr, id]
+      `UPDATE cierres_caja SET
+        venta_total_balanza = $1,
+        venta_posnet = $2,
+        venta_transferencias = $3,
+        fondo_inicial = $4,
+        efectivo_final = $5,
+        gastos_del_dia = $6,
+        notas = $7,
+        fecha = NOW()
+      WHERE id = $8 RETURNING *`,
+      [ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, notasStr, id]
     );
 
     if (result.rowCount === 0) {
