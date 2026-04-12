@@ -11,6 +11,7 @@ const app = express();
 const allowedOrigins = [
   'https://granjaelsol.com.ar',
   'https://www.granjaelsol.com.ar',
+  'https://app-granjaelsol-git-main-patrickmurayaris-projects.vercel.app',
   'http://localhost:5173',
   'http://localhost:3000'
 ];
