@@ -1,4 +1,6 @@
-require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
+if (!process.env.VERCEL) {
+    require('dotenv').config();
+}
 
 const app = require('./src/app');
 
