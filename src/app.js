@@ -7,8 +7,30 @@ const cierreCajaRoutes = require('./routes/cierreCajaRoutes');
 
 const app = express();
 
-// Middlewares
-app.use(cors());
+// Middlewares - CORS configurado para producción
+const allowedOrigins = [
+  'https://granjaelsol.com.ar',
+  'https://www.granjaelsol.com.ar',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Permitir requests sin origin (como mobile apps o curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.warn('CORS bloqueado para origen:', origin);
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // Ruta básica para verificar que el servidor está escuchando
