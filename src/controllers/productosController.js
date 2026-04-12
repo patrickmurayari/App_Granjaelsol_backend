@@ -1,10 +1,20 @@
 const pool = require('../config/db');
 
 const getProductos = async (req, res) => {
+  const { categoria } = req.query;
+
   try {
-    const result = await pool.query(
-      'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible FROM productos'
-    );
+    let query = 'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible FROM productos';
+    const values = [];
+
+    if (categoria && categoria !== 'Todas') {
+      query += ' WHERE categoria = $1';
+      values.push(categoria);
+    }
+
+    query += ' ORDER BY id ASC';
+
+    const result = await pool.query(query, values);
     res.status(200).json(result.rows);
   } catch (err) {
     console.error('Error al consultar productos:', err);
