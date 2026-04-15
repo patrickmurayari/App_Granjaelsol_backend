@@ -4,7 +4,7 @@ const getProductos = async (req, res) => {
   const { categoria } = req.query;
 
   try {
-    let query = 'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible FROM productos';
+    let query = 'SELECT id, nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, es_unidad, disponible FROM productos';
     const values = [];
 
     if (categoria && categoria !== 'Todas') {
@@ -27,7 +27,7 @@ const getProductos = async (req, res) => {
 
 const updateProducto = async (req, res) => {
   const { id } = req.params;
-  const { precio, stock, nombre, descripcion, categoria, imagen_url, peso_promedio_unidad, disponible } = req.body || {};
+  const { precio, stock, nombre, descripcion, categoria, imagen_url, peso_promedio_unidad, es_unidad, disponible } = req.body || {};
 
   const setParts = [];
   const values = [];
@@ -40,6 +40,7 @@ const updateProducto = async (req, res) => {
     categoria,
     imagen_url,
     peso_promedio_unidad,
+    es_unidad,
     disponible,
   };
 
@@ -82,7 +83,7 @@ const updateProducto = async (req, res) => {
 };
 
 const createProducto = async (req, res) => {
-  const { nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad } = req.body || {};
+  const { nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, es_unidad } = req.body || {};
 
   if (!nombre || nombre.trim() === '') {
     return res.status(400).json({ error: 'El nombre del producto es obligatorio' });
@@ -90,8 +91,8 @@ const createProducto = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO productos (nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      `INSERT INTO productos (nombre, precio, stock, descripcion, categoria, imagen_url, peso_promedio_unidad, es_unidad)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
       [
         nombre.trim(),
         precio === '' ? null : Number(precio) || null,
@@ -100,6 +101,7 @@ const createProducto = async (req, res) => {
         categoria?.trim() || null,
         imagen_url?.trim() || null,
         peso_promedio_unidad === '' ? null : Number(peso_promedio_unidad) || null,
+        es_unidad === true,
       ]
     );
 
