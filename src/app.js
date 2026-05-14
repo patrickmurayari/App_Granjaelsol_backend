@@ -4,6 +4,7 @@ const cors = require('cors');
 const productosRoutes = require('./routes/productosRoutes');
 const pedidosRoutes = require('./routes/pedidosRoutes');
 const cierreCajaRoutes = require('./routes/cierreCajaRoutes');
+const inventoryRoutes = require('./routes/inventoryRoutes');
 
 const app = express();
 
@@ -56,6 +57,7 @@ app.get('/health', (req, res) => {
 app.use('/api/productos', productosRoutes);
 app.use('/api/pedidos', pedidosRoutes);
 app.use('/api/cierres', cierreCajaRoutes);
+app.use('/api/inventory', inventoryRoutes);
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {
