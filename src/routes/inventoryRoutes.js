@@ -1,5 +1,5 @@
 const { Router } = require('express');
-const { createEntry, getSupplierBalance, createPayment, getSuppliers, createSupplier, getEntriesBySupplier, getEntryDetails, updateItem, deleteItem } = require('../controllers/inventoryController');
+const { createEntry, getSupplierBalance, createPayment, getSuppliers, createSupplier, getEntriesBySupplier, getEntryDetails, updateItem, deleteItem, getPaymentsBySupplier } = require('../controllers/inventoryController');
 
 const router = Router();
 
@@ -12,5 +12,6 @@ router.put('/items/:itemId', updateItem);
 router.delete('/items/:itemId', deleteItem);
 router.get('/balance/:supplierId', getSupplierBalance);
 router.post('/payments', createPayment);
+router.get('/payments/supplier/:supplierId', getPaymentsBySupplier);
 
 module.exports = router;

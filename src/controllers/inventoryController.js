@@ -145,6 +145,32 @@ const getSupplierBalance = async (req, res) => {
   }
 };
 
+// ── GET /api/inventory/payments/supplier/:supplierId ──
+const getPaymentsBySupplier = async (req, res) => {
+  const { supplierId } = req.params;
+
+  if (!supplierId) {
+    return res.status(400).json({ error: 'supplierId es obligatorio' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT id, supplier_id, payment_date, method, amount_haber, created_at
+       FROM supplier_payments
+       WHERE supplier_id = $1
+       ORDER BY payment_date DESC, created_at DESC`,
+      [supplierId]
+    );
+    return res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error al consultar pagos del proveedor:', err);
+    return res.status(500).json({
+      error: 'No se pudo consultar los pagos',
+      mensaje: 'Intenta nuevamente más tarde.',
+    });
+  }
+};
+
 // ── POST /api/inventory/payments ──
 const createPayment = async (req, res) => {
   const { supplier_id, payment_date, method, amount_haber } = req.body || {};
@@ -457,4 +483,5 @@ module.exports = {
   getEntryDetails,
   updateItem,
   deleteItem,
+  getPaymentsBySupplier,
 };
