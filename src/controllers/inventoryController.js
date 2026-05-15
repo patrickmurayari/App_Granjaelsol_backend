@@ -222,6 +222,89 @@ const createPayment = async (req, res) => {
   }
 };
 
+// ── PUT /api/inventory/payments/:paymentId ──
+const updatePayment = async (req, res) => {
+  const { paymentId } = req.params;
+  const { amount_haber, payment_date, method } = req.body || {};
+
+  if (!paymentId) {
+    return res.status(400).json({ error: 'paymentId es obligatorio' });
+  }
+
+  if (amount_haber !== undefined && (Number(amount_haber) <= 0 || isNaN(Number(amount_haber)))) {
+    return res.status(400).json({ error: 'amount_haber debe ser un número positivo mayor a cero' });
+  }
+
+  const validMethods = ['efectivo', 'transferencia'];
+  if (method !== undefined) {
+    const m = method.toLowerCase().trim();
+    if (!validMethods.includes(m)) {
+      return res.status(400).json({ error: `method debe ser uno de: ${validMethods.join(', ')}` });
+    }
+  }
+
+  try {
+    const existing = await pool.query('SELECT id FROM supplier_payments WHERE id = $1', [paymentId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Pago no encontrado' });
+    }
+
+    const fields = [];
+    const values = [];
+    let idx = 1;
+
+    if (amount_haber !== undefined) {
+      fields.push(`amount_haber = $${idx++}`);
+      values.push(Math.round(Number(amount_haber) * 100) / 100);
+    }
+    if (payment_date !== undefined) {
+      fields.push(`payment_date = $${idx++}`);
+      values.push(payment_date);
+    }
+    if (method !== undefined) {
+      fields.push(`method = $${idx++}`);
+      values.push(method.toLowerCase().trim());
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: 'No se enviaron campos para actualizar' });
+    }
+
+    values.push(paymentId);
+    const result = await pool.query(
+      `UPDATE supplier_payments SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, supplier_id, payment_date, method, amount_haber, created_at`,
+      values
+    );
+
+    return res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error al actualizar pago:', err);
+    return res.status(500).json({ error: 'No se pudo actualizar el pago' });
+  }
+};
+
+// ── DELETE /api/inventory/payments/:paymentId ──
+const deletePayment = async (req, res) => {
+  const { paymentId } = req.params;
+
+  if (!paymentId) {
+    return res.status(400).json({ error: 'paymentId es obligatorio' });
+  }
+
+  try {
+    const existing = await pool.query('SELECT id FROM supplier_payments WHERE id = $1', [paymentId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Pago no encontrado' });
+    }
+
+    await pool.query('DELETE FROM supplier_payments WHERE id = $1', [paymentId]);
+    return res.status(200).json({ message: 'Pago eliminado correctamente' });
+  } catch (err) {
+    console.error('Error al eliminar pago:', err);
+    return res.status(500).json({ error: 'No se pudo eliminar el pago' });
+  }
+};
+
 // ── GET /api/inventory/suppliers ──
 const getSuppliers = async (req, res) => {
   try {
@@ -484,4 +567,6 @@ module.exports = {
   updateItem,
   deleteItem,
   getPaymentsBySupplier,
+  updatePayment,
+  deletePayment,
 };
