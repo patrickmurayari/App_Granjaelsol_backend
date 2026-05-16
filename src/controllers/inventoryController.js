@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 
 const createEntry = async (req, res) => {
-  const { supplier_id, invoice_number, entry_date, items } = req.body || {};
+  const { supplier_id, invoice_number, entry_date, items, iva_21, percepcion_iva, percepcion_iibb } = req.body || {};
 
   // ── Validaciones ──
   if (!supplier_id) {
@@ -37,8 +37,16 @@ const createEntry = async (req, res) => {
     };
   });
 
-  const totalDebe = Math.round(
+  const subtotalNeto = Math.round(
     processedItems.reduce((sum, item) => sum + item.total_item, 0) * 100
+  ) / 100;
+
+  const parsedIva21 = Math.round(Number(iva_21 || 0) * 100) / 100;
+  const parsedPercepcionIva = Math.round(Number(percepcion_iva || 0) * 100) / 100;
+  const parsedPercepcionIibb = Math.round(Number(percepcion_iibb || 0) * 100) / 100;
+
+  const totalDebe = Math.round(
+    (subtotalNeto + parsedIva21 + parsedPercepcionIva + parsedPercepcionIibb) * 100
   ) / 100;
 
   const invoiceNumber = invoice_number?.trim() || null;
@@ -51,10 +59,10 @@ const createEntry = async (req, res) => {
 
     // Insertar cabecera
     const entryResult = await client.query(
-      `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, total_debe)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, supplier_id, invoice_number, entry_date, total_debe, created_at`,
-      [supplier_id, invoiceNumber, entryDate, totalDebe]
+      `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, created_at`,
+      [supplier_id, invoiceNumber, entryDate, subtotalNeto, parsedIva21, parsedPercepcionIva, parsedPercepcionIibb, totalDebe]
     );
 
     const entryId = entryResult.rows[0].id;
@@ -364,7 +372,7 @@ const getEntriesBySupplier = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, supplier_id, invoice_number, entry_date, total_debe, created_at
+      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, created_at
        FROM merchandise_entries
        WHERE supplier_id = $1
        ORDER BY entry_date DESC, created_at DESC`,
@@ -390,7 +398,7 @@ const getEntryDetails = async (req, res) => {
 
   try {
     const entryResult = await pool.query(
-      `SELECT id, supplier_id, invoice_number, entry_date, total_debe, created_at
+      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, created_at
        FROM merchandise_entries
        WHERE id = $1`,
       [entryId]
@@ -468,23 +476,34 @@ const updateItem = async (req, res) => {
       [product_name.trim(), weights.map(Number), parsedPrice, totalItem, itemId]
     );
 
-    // Recalcular total_debe de la cabecera
+    // Recalcular subtotal_neto y total_debe de la cabecera
     const sumResult = await client.query(
-      'SELECT COALESCE(SUM(total_item), 0) AS new_total FROM merchandise_items WHERE entry_id = $1',
+      'SELECT COALESCE(SUM(total_item), 0) AS new_subtotal FROM merchandise_items WHERE entry_id = $1',
       [entryId]
     );
-    const newTotal = Math.round(Number(sumResult.rows[0].new_total) * 100) / 100;
+    const newSubtotalNeto = Math.round(Number(sumResult.rows[0].new_subtotal) * 100) / 100;
+
+    // Obtener impuestos existentes de la cabecera
+    const taxResult = await client.query(
+      'SELECT COALESCE(iva_21, 0) AS iva_21, COALESCE(percepcion_iva, 0) AS percepcion_iva, COALESCE(percepcion_iibb, 0) AS percepcion_iibb FROM merchandise_entries WHERE id = $1',
+      [entryId]
+    );
+    const taxes = taxResult.rows[0];
+    const newTotalDebe = Math.round(
+      (newSubtotalNeto + Number(taxes.iva_21) + Number(taxes.percepcion_iva) + Number(taxes.percepcion_iibb)) * 100
+    ) / 100;
 
     await client.query(
-      'UPDATE merchandise_entries SET total_debe = $1 WHERE id = $2',
-      [newTotal, entryId]
+      'UPDATE merchandise_entries SET subtotal_neto = $1, total_debe = $2 WHERE id = $3',
+      [newSubtotalNeto, newTotalDebe, entryId]
     );
 
     await client.query('COMMIT');
 
     return res.status(200).json({
       item: itemResult.rows[0],
-      entry_total_debe: newTotal,
+      entry_subtotal_neto: newSubtotalNeto,
+      entry_total_debe: newTotalDebe,
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -525,16 +544,26 @@ const deleteItem = async (req, res) => {
     // Eliminar item
     await client.query('DELETE FROM merchandise_items WHERE id = $1', [itemId]);
 
-    // Recalcular total_debe de la cabecera
+    // Recalcular subtotal_neto y total_debe de la cabecera
     const sumResult = await client.query(
-      'SELECT COALESCE(SUM(total_item), 0) AS new_total FROM merchandise_items WHERE entry_id = $1',
+      'SELECT COALESCE(SUM(total_item), 0) AS new_subtotal FROM merchandise_items WHERE entry_id = $1',
       [entryId]
     );
-    const newTotal = Math.round(Number(sumResult.rows[0].new_total) * 100) / 100;
+    const newSubtotalNeto = Math.round(Number(sumResult.rows[0].new_subtotal) * 100) / 100;
+
+    // Obtener impuestos existentes de la cabecera
+    const taxResult = await client.query(
+      'SELECT COALESCE(iva_21, 0) AS iva_21, COALESCE(percepcion_iva, 0) AS percepcion_iva, COALESCE(percepcion_iibb, 0) AS percepcion_iibb FROM merchandise_entries WHERE id = $1',
+      [entryId]
+    );
+    const taxes = taxResult.rows[0];
+    const newTotalDebe = Math.round(
+      (newSubtotalNeto + Number(taxes.iva_21) + Number(taxes.percepcion_iva) + Number(taxes.percepcion_iibb)) * 100
+    ) / 100;
 
     await client.query(
-      'UPDATE merchandise_entries SET total_debe = $1 WHERE id = $2',
-      [newTotal, entryId]
+      'UPDATE merchandise_entries SET subtotal_neto = $1, total_debe = $2 WHERE id = $3',
+      [newSubtotalNeto, newTotalDebe, entryId]
     );
 
     await client.query('COMMIT');
@@ -542,7 +571,8 @@ const deleteItem = async (req, res) => {
     return res.status(200).json({
       deleted: true,
       entry_id: entryId,
-      entry_total_debe: newTotal,
+      entry_subtotal_neto: newSubtotalNeto,
+      entry_total_debe: newTotalDebe,
     });
   } catch (err) {
     await client.query('ROLLBACK');
