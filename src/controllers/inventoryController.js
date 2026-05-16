@@ -619,6 +619,53 @@ const deleteItem = async (req, res) => {
   }
 };
 
+// ── DELETE /api/inventory/entries/:entryId ──
+const deleteEntry = async (req, res) => {
+  const { entryId } = req.params;
+
+  if (!entryId) {
+    return res.status(400).json({ error: 'entryId es obligatorio' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Verificar que la entrada existe
+    const entryCheck = await client.query(
+      'SELECT id, supplier_id FROM merchandise_entries WHERE id = $1',
+      [entryId]
+    );
+    if (entryCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Remito no encontrado' });
+    }
+
+    // Eliminar items asociados
+    await client.query('DELETE FROM merchandise_items WHERE entry_id = $1', [entryId]);
+
+    // Eliminar la cabecera
+    await client.query('DELETE FROM merchandise_entries WHERE id = $1', [entryId]);
+
+    await client.query('COMMIT');
+
+    return res.status(200).json({
+      deleted: true,
+      entry_id: Number(entryId),
+      supplier_id: entryCheck.rows[0].supplier_id,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error al eliminar remito:', err);
+    return res.status(500).json({
+      error: 'No se pudo eliminar el remito',
+      mensaje: 'Intenta nuevamente más tarde.',
+    });
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   createEntry,
   getSupplierBalance,
@@ -629,6 +676,7 @@ module.exports = {
   getEntryDetails,
   updateItem,
   deleteItem,
+  deleteEntry,
   getPaymentsBySupplier,
   updatePayment,
   deletePayment,
