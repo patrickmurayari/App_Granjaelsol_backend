@@ -11,13 +11,21 @@ const createEntry = async (req, res) => {
     return res.status(400).json({ error: 'items debe ser un array con al menos un producto' });
   }
 
+  const validUnitTypes = ['kg', 'u'];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item.product_name) {
       return res.status(400).json({ error: `items[${i}].product_name es obligatorio` });
     }
-    if (!Array.isArray(item.weights) || item.weights.length === 0) {
-      return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso` });
+    const ut = (item.unit_type || 'kg').toLowerCase().trim();
+    if (!validUnitTypes.includes(ut)) {
+      return res.status(400).json({ error: `items[${i}].unit_type debe ser 'kg' o 'u'` });
+    }
+    if (ut === 'kg' && (!Array.isArray(item.weights) || item.weights.length === 0)) {
+      return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso (unit_type=kg)` });
+    }
+    if (ut === 'u' && (item.quantity == null || Number(item.quantity) <= 0)) {
+      return res.status(400).json({ error: `items[${i}].quantity debe ser un número positivo (unit_type=u)` });
     }
     if (item.unit_price == null || Number(item.unit_price) <= 0) {
       return res.status(400).json({ error: `items[${i}].unit_price debe ser un número positivo` });
@@ -26,12 +34,20 @@ const createEntry = async (req, res) => {
 
   // ── Cálculos ──
   const processedItems = items.map((item) => {
-    const totalWeight = item.weights.reduce((sum, w) => sum + Number(w), 0);
+    const unitType = (item.unit_type || 'kg').toLowerCase().trim();
+    let weights;
+    if (unitType === 'u') {
+      weights = [Number(item.quantity)];
+    } else {
+      weights = item.weights.map(Number);
+    }
+    const totalQty = weights.reduce((sum, w) => sum + Number(w), 0);
     const unitPrice = Number(item.unit_price);
-    const totalItem = Math.round(totalWeight * unitPrice * 100) / 100;
+    const totalItem = Math.round(totalQty * unitPrice * 100) / 100;
     return {
       product_name: item.product_name.trim(),
-      weights: item.weights.map(Number),
+      weights,
+      unit_type: unitType,
       unit_price: unitPrice,
       total_item: totalItem,
     };
@@ -71,10 +87,10 @@ const createEntry = async (req, res) => {
     const insertedItems = [];
     for (const item of processedItems) {
       const itemResult = await client.query(
-        `INSERT INTO merchandise_items (entry_id, product_name, weights, unit_price, total_item)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, entry_id, product_name, weights, unit_price, total_item`,
-        [entryId, item.product_name, item.weights, item.unit_price, item.total_item]
+        `INSERT INTO merchandise_items (entry_id, product_name, weights, unit_type, unit_price, total_item)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, entry_id, product_name, weights, unit_type, unit_price, total_item`,
+        [entryId, item.product_name, item.weights, item.unit_type, item.unit_price, item.total_item]
       );
       insertedItems.push(itemResult.rows[0]);
     }
@@ -409,7 +425,7 @@ const getEntryDetails = async (req, res) => {
     }
 
     const itemsResult = await pool.query(
-      `SELECT id, entry_id, product_name, weights, unit_price, total_item
+      `SELECT id, entry_id, product_name, weights, unit_type, unit_price, total_item
        FROM merchandise_items
        WHERE entry_id = $1
        ORDER BY id ASC`,
@@ -432,7 +448,7 @@ const getEntryDetails = async (req, res) => {
 // ── PUT /api/inventory/items/:itemId ──
 const updateItem = async (req, res) => {
   const { itemId } = req.params;
-  const { product_name, weights, unit_price } = req.body || {};
+  const { product_name, weights, unit_price, unit_type, quantity } = req.body || {};
 
   if (!itemId) {
     return res.status(400).json({ error: 'itemId es obligatorio' });
@@ -440,16 +456,33 @@ const updateItem = async (req, res) => {
   if (!product_name || !product_name.trim()) {
     return res.status(400).json({ error: 'product_name es obligatorio' });
   }
-  if (!Array.isArray(weights) || weights.length === 0) {
-    return res.status(400).json({ error: 'weights debe ser un array con al menos un peso' });
+
+  const validUnitTypes = ['kg', 'u'];
+  const ut = (unit_type || 'kg').toLowerCase().trim();
+  if (!validUnitTypes.includes(ut)) {
+    return res.status(400).json({ error: "unit_type debe ser 'kg' o 'u'" });
   }
+
+  let resolvedWeights;
+  if (ut === 'u') {
+    if (quantity == null || Number(quantity) <= 0) {
+      return res.status(400).json({ error: 'quantity debe ser un número positivo (unit_type=u)' });
+    }
+    resolvedWeights = [Number(quantity)];
+  } else {
+    if (!Array.isArray(weights) || weights.length === 0) {
+      return res.status(400).json({ error: 'weights debe ser un array con al menos un peso (unit_type=kg)' });
+    }
+    resolvedWeights = weights.map(Number);
+  }
+
   if (unit_price == null || Number(unit_price) <= 0) {
     return res.status(400).json({ error: 'unit_price debe ser un número positivo' });
   }
 
-  const totalWeight = weights.reduce((sum, w) => sum + Number(w), 0);
+  const totalQty = resolvedWeights.reduce((sum, w) => sum + Number(w), 0);
   const parsedPrice = Number(unit_price);
-  const totalItem = Math.round(totalWeight * parsedPrice * 100) / 100;
+  const totalItem = Math.round(totalQty * parsedPrice * 100) / 100;
 
   const client = await pool.connect();
   try {
@@ -470,10 +503,10 @@ const updateItem = async (req, res) => {
     // Actualizar item
     const itemResult = await client.query(
       `UPDATE merchandise_items
-       SET product_name = $1, weights = $2, unit_price = $3, total_item = $4
-       WHERE id = $5
-       RETURNING id, entry_id, product_name, weights, unit_price, total_item`,
-      [product_name.trim(), weights.map(Number), parsedPrice, totalItem, itemId]
+       SET product_name = $1, weights = $2, unit_type = $3, unit_price = $4, total_item = $5
+       WHERE id = $6
+       RETURNING id, entry_id, product_name, weights, unit_type, unit_price, total_item`,
+      [product_name.trim(), resolvedWeights, ut, parsedPrice, totalItem, itemId]
     );
 
     // Recalcular subtotal_neto y total_debe de la cabecera
