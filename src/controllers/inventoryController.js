@@ -694,6 +694,123 @@ const deleteEntry = async (req, res) => {
   }
 };
 
+// ── GET /api/inventory/suppliers/:supplierId/statement ──
+const getStatement = async (req, res) => {
+  const { supplierId } = req.params;
+  const { startDate, endDate } = req.query;
+
+  if (!supplierId) {
+    return res.status(400).json({ error: 'supplierId es obligatorio' });
+  }
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: 'startDate y endDate son obligatorios (YYYY-MM-DD)' });
+  }
+
+  // Validar formato de fechas
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+    return res.status(400).json({ error: 'Las fechas deben tener formato YYYY-MM-DD' });
+  }
+
+  try {
+    // 1. Saldo anterior (arrastre): debe y haber antes de startDate
+    const debeBefore = await pool.query(
+      `SELECT COALESCE(SUM(total_debe), 0) AS total
+       FROM merchandise_entries
+       WHERE supplier_id = $1 AND entry_date < $2`,
+      [supplierId, startDate]
+    );
+    const haberBefore = await pool.query(
+      `SELECT COALESCE(SUM(amount_haber), 0) AS total
+       FROM supplier_payments
+       WHERE supplier_id = $1 AND payment_date < $2`,
+      [supplierId, startDate]
+    );
+
+    const initialBalance = Math.round(
+      (parseFloat(debeBefore.rows[0].total) - parseFloat(haberBefore.rows[0].total)) * 100
+    ) / 100;
+
+    // 2. Movimientos del período
+    const entriesResult = await pool.query(
+      `SELECT id, entry_date AS date, invoice_number, total_debe, is_adjustment, adjustment_notes, created_at
+       FROM merchandise_entries
+       WHERE supplier_id = $1 AND entry_date BETWEEN $2 AND $3
+       ORDER BY entry_date ASC, created_at ASC`,
+      [supplierId, startDate, endDate]
+    );
+
+    const paymentsResult = await pool.query(
+      `SELECT id, payment_date AS date, method, amount_haber, created_at
+       FROM supplier_payments
+       WHERE supplier_id = $1 AND payment_date BETWEEN $2 AND $3
+       ORDER BY payment_date ASC, created_at ASC`,
+      [supplierId, startDate, endDate]
+    );
+
+    // 3. Resumen de totales del período
+    const periodDebe = Math.round(
+      entriesResult.rows.reduce((sum, e) => sum + parseFloat(e.total_debe), 0) * 100
+    ) / 100;
+    const periodHaber = Math.round(
+      paymentsResult.rows.reduce((sum, p) => sum + parseFloat(p.amount_haber), 0) * 100
+    ) / 100;
+    const finalBalance = Math.round((initialBalance + periodDebe - periodHaber) * 100) / 100;
+
+    // 4. Combinar movimientos ordenados por fecha
+    const movements = [
+      ...entriesResult.rows.map((e) => ({
+        id: e.id,
+        date: e.date instanceof Date ? e.date.toISOString().split('T')[0] : (e.date || ''),
+        type: isAdjustment(e) ? 'adjustment' : 'entry',
+        description: e.is_adjustment
+          ? (e.adjustment_notes || 'Ajuste manual')
+          : (`Remito ${e.invoice_number || '—'}`),
+        debe: parseFloat(e.total_debe),
+        haber: 0,
+      })),
+      ...paymentsResult.rows.map((p) => ({
+        id: p.id,
+        date: p.date instanceof Date ? p.date.toISOString().split('T')[0] : (p.date || ''),
+        type: 'payment',
+        description: `Pago (${fmtPayMethod(p.method)})`,
+        debe: 0,
+        haber: parseFloat(p.amount_haber),
+      })),
+    ].sort((a, b) => {
+      const dateComp = new Date(a.date) - new Date(b.date);
+      if (dateComp !== 0) return dateComp;
+      // Misma fecha: entries antes que payments
+      const typeOrder = { entry: 0, adjustment: 0, payment: 1 };
+      return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
+    });
+
+    return res.status(200).json({
+      summary: {
+        initial_balance: initialBalance,
+        period_debe: periodDebe,
+        period_haber: periodHaber,
+        final_balance: finalBalance,
+      },
+      movements,
+    });
+  } catch (err) {
+    console.error('Error al generar estado de cuenta:', err);
+    return res.status(500).json({
+      error: 'No se pudo generar el estado de cuenta',
+      mensaje: 'Intenta nuevamente más tarde.',
+    });
+  }
+};
+
+// Helpers locales
+const isAdjustment = (entry) => entry.is_adjustment === true;
+const fmtPayMethod = (m) => {
+  if (!m) return '—';
+  const map = { efectivo: 'Efectivo', transferencia: 'Transferencia' };
+  return map[m] || m.charAt(0).toUpperCase() + m.slice(1);
+};
+
 module.exports = {
   createEntry,
   getSupplierBalance,
@@ -708,4 +825,5 @@ module.exports = {
   getPaymentsBySupplier,
   updatePayment,
   deletePayment,
+  getStatement,
 };
