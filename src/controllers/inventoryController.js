@@ -1,69 +1,46 @@
 const pool = require('../config/db');
 
 const createEntry = async (req, res) => {
-  const { supplier_id, invoice_number, entry_date, items, iva_21, percepcion_iva, percepcion_iibb } = req.body || {};
+  const { supplier_id, invoice_number, entry_date, items, iva_21, percepcion_iva, percepcion_iibb, is_adjustment, adjustment_notes, total_debe } = req.body || {};
+
+  const isAdj = is_adjustment === true;
 
   // ── Validaciones ──
   if (!supplier_id) {
     return res.status(400).json({ error: 'supplier_id es obligatorio' });
   }
-  if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'items debe ser un array con al menos un producto' });
+
+  if (isAdj) {
+    // Ajuste: no requiere items, pero sí un monto
+    if (total_debe == null || Number(total_debe) === 0) {
+      return res.status(400).json({ error: 'total_debe es obligatorio y distinto de 0 para ajustes' });
+    }
+  } else {
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items debe ser un array con al menos un producto' });
+    }
+
+    const validUnitTypes = ['kg', 'u'];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.product_name) {
+        return res.status(400).json({ error: `items[${i}].product_name es obligatorio` });
+      }
+      const ut = (item.unit_type || 'kg').toLowerCase().trim();
+      if (!validUnitTypes.includes(ut)) {
+        return res.status(400).json({ error: `items[${i}].unit_type debe ser 'kg' o 'u'` });
+      }
+      if (ut === 'kg' && (!Array.isArray(item.weights) || item.weights.length === 0)) {
+        return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso (unit_type=kg)` });
+      }
+      if (ut === 'u' && (item.quantity == null || Number(item.quantity) <= 0)) {
+        return res.status(400).json({ error: `items[${i}].quantity debe ser un número positivo (unit_type=u)` });
+      }
+      if (item.unit_price == null || Number(item.unit_price) <= 0) {
+        return res.status(400).json({ error: `items[${i}].unit_price debe ser un número positivo` });
+      }
+    }
   }
-
-  const validUnitTypes = ['kg', 'u'];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (!item.product_name) {
-      return res.status(400).json({ error: `items[${i}].product_name es obligatorio` });
-    }
-    const ut = (item.unit_type || 'kg').toLowerCase().trim();
-    if (!validUnitTypes.includes(ut)) {
-      return res.status(400).json({ error: `items[${i}].unit_type debe ser 'kg' o 'u'` });
-    }
-    if (ut === 'kg' && (!Array.isArray(item.weights) || item.weights.length === 0)) {
-      return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso (unit_type=kg)` });
-    }
-    if (ut === 'u' && (item.quantity == null || Number(item.quantity) <= 0)) {
-      return res.status(400).json({ error: `items[${i}].quantity debe ser un número positivo (unit_type=u)` });
-    }
-    if (item.unit_price == null || Number(item.unit_price) <= 0) {
-      return res.status(400).json({ error: `items[${i}].unit_price debe ser un número positivo` });
-    }
-  }
-
-  // ── Cálculos ──
-  const processedItems = items.map((item) => {
-    const unitType = (item.unit_type || 'kg').toLowerCase().trim();
-    let weights;
-    if (unitType === 'u') {
-      weights = [Number(item.quantity)];
-    } else {
-      weights = item.weights.map(Number);
-    }
-    const totalQty = weights.reduce((sum, w) => sum + Number(w), 0);
-    const unitPrice = Number(item.unit_price);
-    const totalItem = Math.round(totalQty * unitPrice * 100) / 100;
-    return {
-      product_name: item.product_name.trim(),
-      weights,
-      unit_type: unitType,
-      unit_price: unitPrice,
-      total_item: totalItem,
-    };
-  });
-
-  const subtotalNeto = Math.round(
-    processedItems.reduce((sum, item) => sum + item.total_item, 0) * 100
-  ) / 100;
-
-  const parsedIva21 = Math.round(Number(iva_21 || 0) * 100) / 100;
-  const parsedPercepcionIva = Math.round(Number(percepcion_iva || 0) * 100) / 100;
-  const parsedPercepcionIibb = Math.round(Number(percepcion_iibb || 0) * 100) / 100;
-
-  const totalDebe = Math.round(
-    (subtotalNeto + parsedIva21 + parsedPercepcionIva + parsedPercepcionIibb) * 100
-  ) / 100;
 
   const invoiceNumber = invoice_number?.trim() || null;
   const entryDate = entry_date || new Date().toISOString().split('T')[0];
@@ -73,12 +50,63 @@ const createEntry = async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    if (isAdj) {
+      // ── Ajuste de saldo ──
+      const adjTotal = Math.round(Number(total_debe) * 100) / 100;
+      const entryResult = await client.query(
+        `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at`,
+        [supplier_id, invoiceNumber, entryDate, adjTotal, 0, 0, 0, adjTotal, true, adjustment_notes?.trim() || null]
+      );
+
+      await client.query('COMMIT');
+
+      return res.status(201).json({
+        entry: entryResult.rows[0],
+        items: [],
+      });
+    }
+
+    // ── Remito normal ──
+    const processedItems = items.map((item) => {
+      const unitType = (item.unit_type || 'kg').toLowerCase().trim();
+      let weights;
+      if (unitType === 'u') {
+        weights = [Number(item.quantity)];
+      } else {
+        weights = item.weights.map(Number);
+      }
+      const totalQty = weights.reduce((sum, w) => sum + Number(w), 0);
+      const unitPrice = Number(item.unit_price);
+      const totalItem = Math.round(totalQty * unitPrice * 100) / 100;
+      return {
+        product_name: item.product_name.trim(),
+        weights,
+        unit_type: unitType,
+        unit_price: unitPrice,
+        total_item: totalItem,
+      };
+    });
+
+    const subtotalNeto = Math.round(
+      processedItems.reduce((sum, item) => sum + item.total_item, 0) * 100
+    ) / 100;
+
+    const parsedIva21 = Math.round(Number(iva_21 || 0) * 100) / 100;
+    const parsedPercepcionIva = Math.round(Number(percepcion_iva || 0) * 100) / 100;
+    const parsedPercepcionIibb = Math.round(Number(percepcion_iibb || 0) * 100) / 100;
+
+    const totalDebeCalc = Math.round(
+      (subtotalNeto + parsedIva21 + parsedPercepcionIva + parsedPercepcionIibb) * 100
+    ) / 100;
+
     // Insertar cabecera
     const entryResult = await client.query(
-      `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, created_at`,
-      [supplier_id, invoiceNumber, entryDate, subtotalNeto, parsedIva21, parsedPercepcionIva, parsedPercepcionIibb, totalDebe]
+      `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at`,
+      [supplier_id, invoiceNumber, entryDate, subtotalNeto, parsedIva21, parsedPercepcionIva, parsedPercepcionIibb, totalDebeCalc, false, null]
     );
 
     const entryId = entryResult.rows[0].id;
@@ -388,7 +416,7 @@ const getEntriesBySupplier = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, created_at
+      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at
        FROM merchandise_entries
        WHERE supplier_id = $1
        ORDER BY entry_date DESC, created_at DESC`,
@@ -414,7 +442,7 @@ const getEntryDetails = async (req, res) => {
 
   try {
     const entryResult = await pool.query(
-      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, created_at
+      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at
        FROM merchandise_entries
        WHERE id = $1`,
       [entryId]
