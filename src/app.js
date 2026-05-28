@@ -6,6 +6,7 @@ const pedidosRoutes = require('./routes/pedidosRoutes');
 const cierreCajaRoutes = require('./routes/cierreCajaRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
 const contentRoutes = require('./routes/contentRoutes');
+const financeRoutes = require('./routes/financeRoutes');
 
 const app = express();
 
@@ -60,6 +61,7 @@ app.use('/api/pedidos', pedidosRoutes);
 app.use('/api/cierres', cierreCajaRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/content', contentRoutes);
+app.use('/api/finance', financeRoutes);
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {
