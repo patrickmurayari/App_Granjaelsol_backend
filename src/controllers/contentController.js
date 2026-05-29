@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const getCarousel = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, image_url, alt_text, order_index
+      `SELECT id, image_url, desktop_image_url, alt_text, order_index
        FROM carousel_images
        WHERE is_active = TRUE
        ORDER BY order_index ASC`

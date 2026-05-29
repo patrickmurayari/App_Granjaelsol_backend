@@ -1,6 +1,8 @@
 const pool = require('../config/db');
 const csv = require('csv-parser');
 const { Readable } = require('stream');
+const sharp = require('sharp');
+const { supabase } = require('../config/supabase');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,4 +195,84 @@ const getRecentSettlements = async (req, res) => {
   }
 };
 
-module.exports = { uploadSettlements, getRecentSettlements };
+const uploadOffer = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se recibió ninguna imagen.' });
+    }
+
+    // 1. Optimizar con sharp → WebP
+    const webpBuffer = await sharp(req.file.buffer)
+      .resize({ width: 800, withoutEnlargement: true })
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    // 2. Subir al bucket 'offers' en Supabase Storage
+    const fileName = `oferta_${Date.now()}.webp`;
+    const { error: uploadError } = await supabase.storage
+      .from('offers')
+      .upload(fileName, webpBuffer, {
+        contentType: 'image/webp',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('Error al subir a Supabase Storage:', uploadError);
+      return res.status(500).json({
+        error: 'Error al subir la imagen al storage.',
+        detalle: uploadError.message,
+      });
+    }
+
+    // 3. Obtener URL pública
+    const { data: urlData } = supabase.storage.from('offers').getPublicUrl(fileName);
+    const imageUrl = urlData.publicUrl;
+
+    // 4. Calcular order_index si no viene en el body
+    let orderIndex = parseInt(req.body.order_index, 10);
+    if (isNaN(orderIndex)) {
+      const idxResult = await pool.query(
+        'SELECT COALESCE(MAX(order_index), 0) + 1 AS next FROM public.store_offers'
+      );
+      orderIndex = idxResult.rows[0].next;
+    }
+
+    // 5. Registrar en base de datos
+    const insertResult = await pool.query(
+      `INSERT INTO public.store_offers (title, image_url, link_to_category, order_index)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [
+        req.body.title || null,
+        imageUrl,
+        req.body.link_to_category || null,
+        orderIndex,
+      ]
+    );
+
+    return res.status(201).json({ success: true, offer: insertResult.rows[0] });
+  } catch (err) {
+    console.error('Error en uploadOffer:', err);
+    return res.status(500).json({
+      error: 'Error interno al procesar la imagen.',
+      mensaje: err.message,
+    });
+  }
+};
+
+const getOffers = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, title, image_url, link_to_category, order_index
+       FROM public.store_offers
+       WHERE is_active = TRUE
+       ORDER BY order_index ASC`
+    );
+    return res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error al obtener ofertas:', err);
+    return res.status(500).json({ error: 'Error al obtener las ofertas.' });
+  }
+};
+
+module.exports = { uploadSettlements, getRecentSettlements, uploadOffer, getOffers };

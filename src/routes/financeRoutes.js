@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const multer = require('multer');
-const { uploadSettlements, getRecentSettlements } = require('../controllers/financeController');
+const { uploadSettlements, getRecentSettlements, uploadOffer, getOffers } = require('../controllers/financeController');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -20,9 +20,23 @@ const upload = multer({
   },
 });
 
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Solo se aceptan archivos de imagen (JPG, PNG, WEBP, etc.)'));
+    }
+  },
+});
+
 const router = Router();
 
 router.post('/settlements/upload', upload.single('file'), uploadSettlements);
 router.get('/settlements/recent', getRecentSettlements);
+router.post('/offers/upload', imageUpload.single('image'), uploadOffer);
+router.get('/offers', getOffers);
 
 module.exports = router;
