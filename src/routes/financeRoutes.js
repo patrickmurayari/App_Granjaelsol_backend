@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const multer = require('multer');
-const { uploadSettlements, getRecentSettlements, uploadOffer, getOffers } = require('../controllers/financeController');
+const { uploadSettlements, getRecentSettlements, uploadOffer, getOffers, deleteOffer, deleteAllOffers } = require('../controllers/financeController');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -38,5 +38,7 @@ router.post('/settlements/upload', upload.single('file'), uploadSettlements);
 router.get('/settlements/recent', getRecentSettlements);
 router.post('/offers/upload', imageUpload.single('image'), uploadOffer);
 router.get('/offers', getOffers);
+router.delete('/offers/:id', deleteOffer);
+router.delete('/offers', deleteAllOffers);
 
 module.exports = router;

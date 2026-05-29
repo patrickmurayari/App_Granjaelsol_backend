@@ -275,4 +275,64 @@ const getOffers = async (req, res) => {
   }
 };
 
-module.exports = { uploadSettlements, getRecentSettlements, uploadOffer, getOffers };
+const deleteOffer = async (req, res) => {
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+
+  try {
+    const selectResult = await pool.query(
+      'SELECT image_url FROM public.store_offers WHERE id = $1',
+      [id]
+    );
+    if (selectResult.rowCount === 0) {
+      return res.status(404).json({ error: 'Oferta no encontrada' });
+    }
+
+    const imageUrl = selectResult.rows[0].image_url;
+    const fileName = imageUrl ? imageUrl.split('/').pop() : null;
+
+    if (fileName) {
+      const { error: storageError } = await supabase.storage
+        .from('offers')
+        .remove([fileName]);
+      if (storageError) {
+        console.warn('No se pudo eliminar del storage:', storageError.message);
+      }
+    }
+
+    await pool.query('DELETE FROM public.store_offers WHERE id = $1', [id]);
+    return res.status(200).json({ deleted: true, id });
+  } catch (err) {
+    console.error('Error al eliminar oferta:', err);
+    return res.status(500).json({ error: 'Error interno al eliminar la oferta.' });
+  }
+};
+
+const deleteAllOffers = async (req, res) => {
+  try {
+    const selectResult = await pool.query(
+      'SELECT image_url FROM public.store_offers'
+    );
+
+    const fileNames = selectResult.rows
+      .map((r) => r.image_url?.split('/').pop())
+      .filter(Boolean);
+
+    if (fileNames.length > 0) {
+      const { error: storageError } = await supabase.storage
+        .from('offers')
+        .remove(fileNames);
+      if (storageError) {
+        console.warn('Error al eliminar archivos del storage:', storageError.message);
+      }
+    }
+
+    await pool.query('DELETE FROM public.store_offers');
+    return res.status(200).json({ deleted: true, count: selectResult.rowCount });
+  } catch (err) {
+    console.error('Error al eliminar todas las ofertas:', err);
+    return res.status(500).json({ error: 'Error interno al eliminar las ofertas.' });
+  }
+};
+
+module.exports = { uploadSettlements, getRecentSettlements, uploadOffer, getOffers, deleteOffer, deleteAllOffers };
