@@ -243,9 +243,9 @@ const uploadOffer = async (req, res) => {
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [
-        req.body.title || null,
+        (req.body.title && req.body.title.trim()) || null,
         imageUrl,
-        req.body.link_to_category || null,
+        (req.body.link_to_category && req.body.link_to_category.trim()) || null,
         orderIndex,
       ]
     );
