@@ -2,6 +2,17 @@ const pool = require('../config/db');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const isPositiveNumber = (v) => Number.isFinite(Number(v)) && Number(v) > 0;
+
+const insertItemWeights = async (client, itemId, weights) => {
+  await client.query(
+    `INSERT INTO merchandise_item_weights (item_id, piece_number, weight)
+     SELECT $1, w.ord::int, w.val
+     FROM unnest($2::numeric[]) WITH ORDINALITY AS w(val, ord)`,
+    [itemId, weights]
+  );
+};
+
 const createEntry = async (req, res) => {
   const { supplier_id, invoice_number, entry_date, items, iva_21 } = req.body || {};
 
@@ -26,6 +37,9 @@ const createEntry = async (req, res) => {
     }
     if (ut === 'kg' && (!Array.isArray(item.weights) || item.weights.length === 0)) {
       return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso (unit_type=kg)` });
+    }
+    if (ut === 'kg' && !item.weights.every(isPositiveNumber)) {
+      return res.status(400).json({ error: `items[${i}].weights debe contener solo números positivos` });
     }
     if (ut === 'u' && (item.quantity == null || Number(item.quantity) <= 0)) {
       return res.status(400).json({ error: `items[${i}].quantity debe ser un número positivo (unit_type=u)` });
@@ -90,6 +104,7 @@ const createEntry = async (req, res) => {
          RETURNING id, entry_id, product_name, weights, unit_type, unit_price, total_item`,
         [entryId, item.product_name, item.weights, item.unit_type, item.unit_price, item.total_item]
       );
+      await insertItemWeights(client, itemResult.rows[0].id, item.weights);
       insertedItems.push(itemResult.rows[0]);
     }
 
@@ -450,10 +465,17 @@ const getEntryDetails = async (req, res) => {
     }
 
     const itemsResult = await pool.query(
-      `SELECT id, entry_id, product_name, weights, unit_type, unit_price, total_item
-       FROM merchandise_items
-       WHERE entry_id = $1
-       ORDER BY id ASC`,
+      `SELECT mi.id, mi.entry_id, mi.product_name, mi.unit_type, mi.unit_price, mi.total_item,
+              COALESCE(
+                json_agg(miw.weight ORDER BY miw.piece_number) FILTER (WHERE miw.weight IS NOT NULL),
+                to_json(mi.weights),
+                '[]'::json
+              ) AS weights
+       FROM merchandise_items mi
+       LEFT JOIN merchandise_item_weights miw ON miw.item_id = mi.id
+       WHERE mi.entry_id = $1
+       GROUP BY mi.id
+       ORDER BY mi.id ASC`,
       [entryId]
     );
 
@@ -498,6 +520,9 @@ const updateItem = async (req, res) => {
     if (!Array.isArray(weights) || weights.length === 0) {
       return res.status(400).json({ error: 'weights debe ser un array con al menos un peso (unit_type=kg)' });
     }
+    if (!weights.every(isPositiveNumber)) {
+      return res.status(400).json({ error: 'weights debe contener solo números positivos' });
+    }
     resolvedWeights = weights.map(Number);
   }
 
@@ -533,6 +558,9 @@ const updateItem = async (req, res) => {
        RETURNING id, entry_id, product_name, weights, unit_type, unit_price, total_item`,
       [product_name.trim(), resolvedWeights, ut, parsedPrice, totalItem, itemId]
     );
+
+    await client.query('DELETE FROM merchandise_item_weights WHERE item_id = $1', [itemId]);
+    await insertItemWeights(client, itemId, resolvedWeights);
 
     // Recalcular subtotal_neto y total_debe de la cabecera
     const sumResult = await client.query(
