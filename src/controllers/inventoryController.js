@@ -1,44 +1,37 @@
 const pool = require('../config/db');
 
-const createEntry = async (req, res) => {
-  const { supplier_id, invoice_number, entry_date, items, iva_21, percepcion_iva, percepcion_iibb, is_adjustment, adjustment_notes, total_debe } = req.body || {};
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  const isAdj = is_adjustment === true;
+const createEntry = async (req, res) => {
+  const { supplier_id, invoice_number, entry_date, items, iva_21 } = req.body || {};
 
   // ── Validaciones ──
   if (!supplier_id) {
     return res.status(400).json({ error: 'supplier_id es obligatorio' });
   }
 
-  if (isAdj) {
-    // Ajuste: no requiere items, pero sí un monto
-    if (total_debe == null || Number(total_debe) === 0) {
-      return res.status(400).json({ error: 'total_debe es obligatorio y distinto de 0 para ajustes' });
-    }
-  } else {
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'items debe ser un array con al menos un producto' });
-    }
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'items debe ser un array con al menos un producto' });
+  }
 
-    const validUnitTypes = ['kg', 'u'];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (!item.product_name) {
-        return res.status(400).json({ error: `items[${i}].product_name es obligatorio` });
-      }
-      const ut = (item.unit_type || 'kg').toLowerCase().trim();
-      if (!validUnitTypes.includes(ut)) {
-        return res.status(400).json({ error: `items[${i}].unit_type debe ser 'kg' o 'u'` });
-      }
-      if (ut === 'kg' && (!Array.isArray(item.weights) || item.weights.length === 0)) {
-        return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso (unit_type=kg)` });
-      }
-      if (ut === 'u' && (item.quantity == null || Number(item.quantity) <= 0)) {
-        return res.status(400).json({ error: `items[${i}].quantity debe ser un número positivo (unit_type=u)` });
-      }
-      if (item.unit_price == null || Number(item.unit_price) <= 0) {
-        return res.status(400).json({ error: `items[${i}].unit_price debe ser un número positivo` });
-      }
+  const validUnitTypes = ['kg', 'u'];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item.product_name) {
+      return res.status(400).json({ error: `items[${i}].product_name es obligatorio` });
+    }
+    const ut = (item.unit_type || 'kg').toLowerCase().trim();
+    if (!validUnitTypes.includes(ut)) {
+      return res.status(400).json({ error: `items[${i}].unit_type debe ser 'kg' o 'u'` });
+    }
+    if (ut === 'kg' && (!Array.isArray(item.weights) || item.weights.length === 0)) {
+      return res.status(400).json({ error: `items[${i}].weights debe ser un array con al menos un peso (unit_type=kg)` });
+    }
+    if (ut === 'u' && (item.quantity == null || Number(item.quantity) <= 0)) {
+      return res.status(400).json({ error: `items[${i}].quantity debe ser un número positivo (unit_type=u)` });
+    }
+    if (item.unit_price == null || Number(item.unit_price) <= 0) {
+      return res.status(400).json({ error: `items[${i}].unit_price debe ser un número positivo` });
     }
   }
 
@@ -50,25 +43,6 @@ const createEntry = async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    if (isAdj) {
-      // ── Ajuste de saldo ──
-      const adjTotal = Math.round(Number(total_debe) * 100) / 100;
-      const entryResult = await client.query(
-        `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at`,
-        [supplier_id, invoiceNumber, entryDate, adjTotal, 0, 0, 0, adjTotal, true, adjustment_notes?.trim() || null]
-      );
-
-      await client.query('COMMIT');
-
-      return res.status(201).json({
-        entry: entryResult.rows[0],
-        items: [],
-      });
-    }
-
-    // ── Remito normal ──
     const processedItems = items.map((item) => {
       const unitType = (item.unit_type || 'kg').toLowerCase().trim();
       let weights;
@@ -94,19 +68,15 @@ const createEntry = async (req, res) => {
     ) / 100;
 
     const parsedIva21 = Math.round(Number(iva_21 || 0) * 100) / 100;
-    const parsedPercepcionIva = Math.round(Number(percepcion_iva || 0) * 100) / 100;
-    const parsedPercepcionIibb = Math.round(Number(percepcion_iibb || 0) * 100) / 100;
 
-    const totalDebeCalc = Math.round(
-      (subtotalNeto + parsedIva21 + parsedPercepcionIva + parsedPercepcionIibb) * 100
-    ) / 100;
+    const totalDebeCalc = Math.round((subtotalNeto + parsedIva21) * 100) / 100;
 
     // Insertar cabecera
     const entryResult = await client.query(
-      `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at`,
-      [supplier_id, invoiceNumber, entryDate, subtotalNeto, parsedIva21, parsedPercepcionIva, parsedPercepcionIibb, totalDebeCalc, false, null]
+      `INSERT INTO merchandise_entries (supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, total_debe)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, total_debe, created_at`,
+      [supplier_id, invoiceNumber, entryDate, subtotalNeto, parsedIva21, totalDebeCalc]
     );
 
     const entryId = entryResult.rows[0].id;
@@ -152,7 +122,10 @@ const getSupplierBalance = async (req, res) => {
   try {
     // Verificar que el proveedor existe
     const supplierResult = await pool.query(
-      'SELECT id, name, category FROM suppliers WHERE id = $1',
+      `SELECT s.id, s.name, s.category_id, sc.name AS category
+       FROM suppliers s
+       JOIN supplier_categories sc ON sc.id = s.category_id
+       WHERE s.id = $1`,
       [supplierId]
     );
 
@@ -182,6 +155,7 @@ const getSupplierBalance = async (req, res) => {
       supplier: {
         id: supplier.id,
         name: supplier.name,
+        category_id: supplier.category_id,
         category: supplier.category,
       },
       total_debe: totalDebe,
@@ -361,7 +335,10 @@ const deletePayment = async (req, res) => {
 const getSuppliers = async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, name, category FROM suppliers ORDER BY name ASC'
+      `SELECT s.id, s.name, s.category_id, sc.name AS category
+       FROM suppliers s
+       JOIN supplier_categories sc ON sc.id = s.category_id
+       ORDER BY s.name ASC`
     );
     return res.status(200).json(result.rows);
   } catch (err) {
@@ -373,31 +350,51 @@ const getSuppliers = async (req, res) => {
   }
 };
 
+// ── GET /api/inventory/supplier-categories ──
+const getSupplierCategories = async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, name FROM supplier_categories ORDER BY name ASC'
+    );
+    return res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error al consultar categorías de proveedores:', err);
+    return res.status(500).json({
+      error: 'No se pudo consultar las categorías de proveedores',
+      mensaje: 'Intenta nuevamente más tarde.',
+    });
+  }
+};
+
 // ── POST /api/inventory/suppliers ──
 const createSupplier = async (req, res) => {
-  const { name, category } = req.body || {};
+  const { name, category_id } = req.body || {};
 
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'name es obligatorio' });
   }
 
-  const validCategories = ['Carne', 'Pollo', 'Cerdo', 'Achuras', 'Pescado', 'Almacén'];
-  const supplierCategory = (category || 'Carne').trim();
-  if (!validCategories.includes(supplierCategory)) {
-    return res.status(400).json({
-      error: `category debe ser uno de: ${validCategories.join(', ')}`,
-    });
+  if (!category_id || typeof category_id !== 'string' || !UUID_REGEX.test(category_id)) {
+    return res.status(400).json({ error: 'category_id es obligatorio y debe ser un UUID válido' });
   }
 
   try {
     const result = await pool.query(
-      `INSERT INTO suppliers (name, category)
-       VALUES ($1, $2)
-       RETURNING id, name, category`,
-      [name.trim(), supplierCategory]
+      `WITH new_supplier AS (
+         INSERT INTO suppliers (name, category_id)
+         VALUES ($1, $2)
+         RETURNING id, name, category_id
+       )
+       SELECT ns.id, ns.name, ns.category_id, sc.name AS category
+       FROM new_supplier ns
+       JOIN supplier_categories sc ON sc.id = ns.category_id`,
+      [name.trim(), category_id]
     );
     return res.status(201).json(result.rows[0]);
   } catch (err) {
+    if (err.code === '23503') {
+      return res.status(400).json({ error: 'category_id no corresponde a una categoría existente' });
+    }
     console.error('Error al crear proveedor:', err);
     return res.status(500).json({
       error: 'No se pudo crear el proveedor',
@@ -416,7 +413,7 @@ const getEntriesBySupplier = async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at
+      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, total_debe, created_at
        FROM merchandise_entries
        WHERE supplier_id = $1
        ORDER BY entry_date DESC, created_at DESC`,
@@ -442,7 +439,7 @@ const getEntryDetails = async (req, res) => {
 
   try {
     const entryResult = await pool.query(
-      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, percepcion_iva, percepcion_iibb, total_debe, is_adjustment, adjustment_notes, created_at
+      `SELECT id, supplier_id, invoice_number, entry_date, subtotal_neto, iva_21, total_debe, created_at
        FROM merchandise_entries
        WHERE id = $1`,
       [entryId]
@@ -546,12 +543,12 @@ const updateItem = async (req, res) => {
 
     // Obtener impuestos existentes de la cabecera
     const taxResult = await client.query(
-      'SELECT COALESCE(iva_21, 0) AS iva_21, COALESCE(percepcion_iva, 0) AS percepcion_iva, COALESCE(percepcion_iibb, 0) AS percepcion_iibb FROM merchandise_entries WHERE id = $1',
+      'SELECT COALESCE(iva_21, 0) AS iva_21 FROM merchandise_entries WHERE id = $1',
       [entryId]
     );
     const taxes = taxResult.rows[0];
     const newTotalDebe = Math.round(
-      (newSubtotalNeto + Number(taxes.iva_21) + Number(taxes.percepcion_iva) + Number(taxes.percepcion_iibb)) * 100
+      (newSubtotalNeto + Number(taxes.iva_21)) * 100
     ) / 100;
 
     await client.query(
@@ -614,12 +611,12 @@ const deleteItem = async (req, res) => {
 
     // Obtener impuestos existentes de la cabecera
     const taxResult = await client.query(
-      'SELECT COALESCE(iva_21, 0) AS iva_21, COALESCE(percepcion_iva, 0) AS percepcion_iva, COALESCE(percepcion_iibb, 0) AS percepcion_iibb FROM merchandise_entries WHERE id = $1',
+      'SELECT COALESCE(iva_21, 0) AS iva_21 FROM merchandise_entries WHERE id = $1',
       [entryId]
     );
     const taxes = taxResult.rows[0];
     const newTotalDebe = Math.round(
-      (newSubtotalNeto + Number(taxes.iva_21) + Number(taxes.percepcion_iva) + Number(taxes.percepcion_iibb)) * 100
+      (newSubtotalNeto + Number(taxes.iva_21)) * 100
     ) / 100;
 
     await client.query(
@@ -733,7 +730,7 @@ const getStatement = async (req, res) => {
 
     // 2. Movimientos del período
     const entriesResult = await pool.query(
-      `SELECT id, entry_date AS date, invoice_number, total_debe, is_adjustment, adjustment_notes, created_at
+      `SELECT id, entry_date AS date, invoice_number, total_debe, created_at
        FROM merchandise_entries
        WHERE supplier_id = $1 AND entry_date BETWEEN $2 AND $3
        ORDER BY entry_date ASC, created_at ASC`,
@@ -762,10 +759,8 @@ const getStatement = async (req, res) => {
       ...entriesResult.rows.map((e) => ({
         id: e.id,
         date: e.date instanceof Date ? e.date.toISOString().split('T')[0] : (e.date || ''),
-        type: isAdjustment(e) ? 'adjustment' : 'entry',
-        description: e.is_adjustment
-          ? (e.adjustment_notes || 'Ajuste manual')
-          : (`Remito ${e.invoice_number || '—'}`),
+        type: 'entry',
+        description: `Remito ${e.invoice_number || '—'}`,
         debe: parseFloat(e.total_debe),
         haber: 0,
       })),
@@ -781,7 +776,7 @@ const getStatement = async (req, res) => {
       const dateComp = new Date(a.date) - new Date(b.date);
       if (dateComp !== 0) return dateComp;
       // Misma fecha: entries antes que payments
-      const typeOrder = { entry: 0, adjustment: 0, payment: 1 };
+      const typeOrder = { entry: 0, payment: 1 };
       return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
     });
 
@@ -804,7 +799,6 @@ const getStatement = async (req, res) => {
 };
 
 // Helpers locales
-const isAdjustment = (entry) => entry.is_adjustment === true;
 const fmtPayMethod = (m) => {
   if (!m) return '—';
   const map = { efectivo: 'Efectivo', transferencia: 'Transferencia' };
@@ -816,6 +810,7 @@ module.exports = {
   getSupplierBalance,
   createPayment,
   getSuppliers,
+  getSupplierCategories,
   createSupplier,
   getEntriesBySupplier,
   getEntryDetails,
