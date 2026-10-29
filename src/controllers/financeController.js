@@ -7,12 +7,13 @@ const { supabase } = require('../config/supabase');
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Convierte DD/MM/YYYY → YYYY-MM-DD para PostgreSQL.
+ * Convierte DD/MM/YYYY o DD/MM/YYYY HH:mm:ss → YYYY-MM-DD para PostgreSQL.
  * Devuelve null si el string está vacío o malformado.
  */
 const parseArgDate = (str) => {
-  if (!str || !str.trim()) return null;
-  const parts = str.trim().split('/');
+  if (!str || !str.toString().trim()) return null;
+  const dateOnly = str.toString().trim().split(/\s+/)[0];
+  const parts = dateOnly.split('/');
   if (parts.length !== 3) return null;
   const [dd, mm, yyyy] = parts;
   if (!dd || !mm || !yyyy) return null;
@@ -20,46 +21,63 @@ const parseArgDate = (str) => {
 };
 
 /**
- * Limpia montos en formato argentino ($1.234,56 o 1.234.567,89)
- * y los convierte a float para PostgreSQL.
+ * Parsea montos contemplando:
+ * - Formato argentino con punto y coma: "1.234,56" -> 1234.56
+ * - Formato estándar internacional con punto: "55384.45" o "-553.84" -> 55384.45 o 553.84
+ * - Formato con coma decimal: "1234,56" -> 1234.56
+ * - Signos de pesos "$" y espacios.
+ * Si absolute === true, devuelve el valor absoluto positivo.
  */
-const parseArgAmount = (str) => {
-  if (!str) return 0;
-  const trimmed = str.trim();
-  if (!trimmed || trimmed === '-' || trimmed === '') return 0;
-  const cleaned = trimmed
-    .replace(/\$/g, '')       // quitar símbolo $
-    .replace(/\s/g, '')       // quitar espacios
-    .replace(/\./g, '')       // quitar puntos de miles
-    .replace(',', '.');       // convertir coma decimal → punto
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? 0 : num;
+const parseArgAmount = (str, absolute = false) => {
+  if (str === undefined || str === null) return 0;
+  let s = String(str).trim().replace(/\$/g, '').replace(/\s/g, '');
+  if (!s || s === '-' || s.toLowerCase() === 'nan') return 0;
+
+  const hasDot = s.includes('.');
+  const hasComma = s.includes(',');
+  if (hasDot && hasComma) {
+    s = s.lastIndexOf(',') > s.lastIndexOf('.')
+      ? s.replace(/\./g, '').replace(',', '.')
+      : s.replace(/,/g, '');
+  } else if (hasComma) {
+    s = (s.match(/,/g).length > 1) ? s.replace(/,/g, '') : s.replace(',', '.');
+  } else if (hasDot && s.match(/\./g).length > 1) {
+    s = s.replace(/\./g, '');
+  }
+
+  const num = parseFloat(s);
+  if (isNaN(num)) return 0;
+  return absolute ? Math.abs(num) : num;
 };
 
 /**
- * Busca el valor de una columna en una fila CSV.
- * Prueba primero coincidencia exacta y luego coincidencia parcial (includes),
- * ambas case-insensitive y con espacios normalizados.
- * Acepta múltiples nombres candidatos (aliases).
+ * Busca columna tolerando mayúsculas, tildes/acentos y coincidencias parciales.
+ * Los candidatos se evalúan en orden de prioridad.
  */
+const normalizeHeader = (s) =>
+  String(s)
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+
 const col = (row, ...candidates) => {
-  const normalizeKey = (s) => s.trim().toUpperCase().replace(/\s+/g, ' ');
-  const rowKeys = Object.keys(row);
+  const keys = Object.keys(row).map((rawKey) => ({ rawKey, nk: normalizeHeader(rawKey) }));
+  const value = (rawKey) => (row[rawKey] ?? '').toString().trim();
 
   // 1. Coincidencia exacta
-  for (const rawKey of rowKeys) {
-    const nk = normalizeKey(rawKey);
-    for (const c of candidates) {
-      if (nk === normalizeKey(c)) return (row[rawKey] || '').trim();
-    }
+  for (const c of candidates) {
+    const nc = normalizeHeader(c);
+    const hit = keys.find(({ nk }) => nk === nc);
+    if (hit) return value(hit.rawKey);
   }
 
-  // 2. Coincidencia parcial (el header contiene el candidato)
-  for (const rawKey of rowKeys) {
-    const nk = normalizeKey(rawKey);
-    for (const c of candidates) {
-      if (nk.includes(normalizeKey(c))) return (row[rawKey] || '').trim();
-    }
+  // 2. Coincidencia parcial
+  for (const c of candidates) {
+    const nc = normalizeHeader(c);
+    const hit = keys.find(({ nk }) => nk.includes(nc));
+    if (hit) return value(hit.rawKey);
   }
 
   return '';
@@ -118,7 +136,7 @@ const uploadSettlements = async (req, res) => {
       await client.query('BEGIN');
 
       for (const row of rows) {
-        const liquidationNumber = col(row, 'NUMERO LIQUIDACION');
+        const liquidationNumber = col(row, 'LIQUIDACION', 'NUMERO LIQUIDACION', 'LIQ');
 
         // Ignorar filas vacías o de totales (sin número de liquidación)
         if (!liquidationNumber) {
@@ -126,15 +144,15 @@ const uploadSettlements = async (req, res) => {
           continue;
         }
 
-        const paymentDate       = parseArgDate(col(row, 'FECHA DE PAGO'));
-        const presentationDate  = parseArgDate(col(row, 'FECHA DE PRESENTACION'));
-        const cardType          = col(row, 'TARJETA');
-        const grossAmount       = parseArgAmount(col(row, 'TOTAL IMPORTE ACEPTADO', 'VENTAS C/DESCUENTO'));
-        const netAmount         = parseArgAmount(col(row, 'IMPORTE NETO DE PAGOS'));
-        const arancelAmount     = parseArgAmount(col(row, 'ARANCEL'));
-        const ivaAmount         = parseArgAmount(col(row, 'IVA CRED.FISC.COMERCIO'));
-        const taxWithholding    = parseArgAmount(col(row, 'RETENCION ING.BRUTOS SIRTAC', 'SIRTAC'));
-        const financialCost     = parseArgAmount(col(row, 'DTO S/VENTAS FIN ADQ CONT'));
+        const paymentDate       = parseArgDate(col(row, 'FECHA DE PAGO', 'PAGO'));
+        const presentationDate  = parseArgDate(col(row, 'FECHA DE PRES', 'FECHA DE PRESENTACION', 'PRESENTACION'));
+        const cardType          = col(row, 'TIPO', 'TARJETA', 'MARCA');
+        const grossAmount       = parseArgAmount(col(row, 'MONTO BRUTO', 'TOTAL IMPORTE ACEPTADO', 'VENTAS C/DESCUENTO', 'BRUTO'));
+        const netAmount         = parseArgAmount(col(row, 'NETO FINAL AL COMERCIO', 'IMPORTE NETO LIQ', 'IMPORTE NETO DE PAGOS', 'IMPORTE NETO PAGOS', 'TOTAL LIQUIDACION', 'NETO'));
+        const arancelAmount     = parseArgAmount(col(row, 'ARANCELES + COSTOS FINAN', 'ARANCEL', 'DTO ARANCEL'), true);
+        const ivaAmount         = parseArgAmount(col(row, 'IVA CRED. FISC. COMERCIOS', 'IVA CRED.FISC.COMERCIO', 'IVA CRED FISC', 'IVA'), true);
+        const taxWithholding    = parseArgAmount(col(row, 'RETENCION IIBB', 'RETENCION ING.BRUTOS SIRTAC', 'SIRTAC', 'RETENCION ING BRUTOS'), true);
+        const financialCost     = parseArgAmount(col(row, 'DESCUENTO DE FINANCIACION', 'DTO S/VENTAS FIN ADQ CONT', 'COSTO FINANCIERO'), true);
 
         const result = await client.query(
           `INSERT INTO fiserv_daily_settlements
