@@ -7,6 +7,8 @@ const cierreCajaRoutes = require('./routes/cierreCajaRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const financeRoutes = require('./routes/financeRoutes');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const { requireAuth } = require('./middleware/authMiddleware');
 
 const app = express();
 
@@ -58,10 +60,11 @@ app.get('/health', (req, res) => {
 // Rutas de la API
 app.use('/api/productos', productosRoutes);
 app.use('/api/pedidos', pedidosRoutes);
-app.use('/api/cierres', cierreCajaRoutes);
-app.use('/api/inventory', inventoryRoutes);
+app.use('/api/cierres', requireAuth, cierreCajaRoutes);
+app.use('/api/inventory', requireAuth, inventoryRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/finance', financeRoutes);
+app.use('/api/analytics', requireAuth, analyticsRoutes);
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {

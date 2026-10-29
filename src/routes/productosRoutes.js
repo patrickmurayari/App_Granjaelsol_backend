@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const multer = require('multer');
 const { getProductos, updateProducto, createProducto, deleteProducto } = require('../controllers/productosController');
+const { requireAuth } = require('../middleware/authMiddleware');
 
 const imageUpload = multer({
   storage: multer.memoryStorage(),
@@ -17,8 +18,8 @@ const imageUpload = multer({
 const router = Router();
 
 router.get('/', getProductos);
-router.put('/:id', updateProducto);
-router.post('/', imageUpload.single('image'), createProducto);
-router.delete('/:id', deleteProducto);
+router.put('/:id', requireAuth, updateProducto);
+router.post('/', requireAuth, imageUpload.single('image'), createProducto);
+router.delete('/:id', requireAuth, deleteProducto);
 
 module.exports = router;
