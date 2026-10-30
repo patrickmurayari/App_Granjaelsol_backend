@@ -5,7 +5,7 @@ const getCierres = async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, fecha, venta_total_balanza, venta_posnet, venta_transferencias, fondo_inicial, efectivo_final, gastos_del_dia, diferencia_caja, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
+      'SELECT id, fecha, venta_total_balanza, venta_posnet, venta_transferencias, fondo_inicial, efectivo_final, gastos_del_dia, diferencia_caja, monto_efectivo, notas, created_at FROM cierres_caja ORDER BY fecha DESC LIMIT $1',
       [Number(limite)]
     );
     res.status(200).json(result.rows);
@@ -26,6 +26,8 @@ const createOrUpdateCierre = async (req, res) => {
     fondo_inicial,
     efectivo_final,
     gastos_del_dia,
+    monto_efectivo,
+    efectivo_recaudado,
     notas
   } = req.body || {};
 
@@ -35,6 +37,7 @@ const createOrUpdateCierre = async (req, res) => {
   const fondoInicial = Number(fondo_inicial) || 0;
   const efectivoFinal = Number(efectivo_final) || 0;
   const gastos = Number(gastos_del_dia) || 0;
+  const montoEfectivo = Number(monto_efectivo ?? efectivo_recaudado) || 0;
   const notasStr = notas?.trim() || null;
 
   const hoy = new Date().toISOString().split('T')[0];
@@ -56,18 +59,19 @@ const createOrUpdateCierre = async (req, res) => {
           fondo_inicial = $4,
           efectivo_final = $5,
           gastos_del_dia = $6,
-          notas = $7,
+          monto_efectivo = $7,
+          notas = $8,
           fecha = NOW()
-        WHERE fecha = $8 RETURNING *`,
-        [ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, notasStr, hoy]
+        WHERE fecha = $9 RETURNING *`,
+        [ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, montoEfectivo, notasStr, hoy]
       );
     } else {
       result = await pool.query(
         `INSERT INTO cierres_caja (
           fecha, venta_total_balanza, venta_posnet, venta_transferencias,
-          fondo_inicial, efectivo_final, gastos_del_dia, notas, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) RETURNING *`,
-        [hoy, ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, notasStr]
+          fondo_inicial, efectivo_final, gastos_del_dia, monto_efectivo, notas, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) RETURNING *`,
+        [hoy, ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, montoEfectivo, notasStr]
       );
     }
 
@@ -114,10 +118,11 @@ const updateCierre = async (req, res) => {
         fondo_inicial = $4,
         efectivo_final = $5,
         gastos_del_dia = $6,
-        notas = $7,
+        monto_efectivo = $7,
+        notas = $8,
         fecha = NOW()
-      WHERE id = $8 RETURNING *`,
-      [ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, notasStr, id]
+      WHERE id = $9 RETURNING *`,
+      [ventaBalanza, posnet, transferencias, fondoInicial, efectivoFinal, gastos, montoEfectivo, notasStr, id]
     );
 
     if (result.rowCount === 0) {
