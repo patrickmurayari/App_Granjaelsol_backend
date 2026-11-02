@@ -722,19 +722,26 @@ const deleteEntry = async (req, res) => {
 // ── GET /api/inventory/suppliers/:supplierId/statement ──
 const getStatement = async (req, res) => {
   const { supplierId } = req.params;
-  const { startDate, endDate } = req.query;
-
   if (!supplierId) {
     return res.status(400).json({ error: 'supplierId es obligatorio' });
   }
-  if (!startDate || !endDate) {
-    return res.status(400).json({ error: 'startDate y endDate son obligatorios (YYYY-MM-DD)' });
-  }
+
+  // Por defecto: semana actual (lunes a domingo)
+  const fmtLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const now = new Date();
+  const mondayOffset = now.getDay() === 0 ? -6 : 1 - now.getDay();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset);
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+  const startDate = req.query.startDate || fmtLocal(monday);
+  const endDate = req.query.endDate || fmtLocal(sunday);
 
   // Validar formato de fechas
   const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
   if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
     return res.status(400).json({ error: 'Las fechas deben tener formato YYYY-MM-DD' });
+  }
+  if (startDate > endDate) {
+    return res.status(400).json({ error: 'startDate no puede ser posterior a endDate' });
   }
 
   try {
@@ -809,6 +816,12 @@ const getStatement = async (req, res) => {
     });
 
     return res.status(200).json({
+      startDate,
+      endDate,
+      saldo_anterior: initialBalance,
+      total_remitos: periodDebe,
+      total_pagos: periodHaber,
+      saldo_cierre: finalBalance,
       summary: {
         initial_balance: initialBalance,
         period_debe: periodDebe,
@@ -816,6 +829,7 @@ const getStatement = async (req, res) => {
         final_balance: finalBalance,
       },
       movements,
+      movimientos: movements,
     });
   } catch (err) {
     console.error('Error al generar estado de cuenta:', err);
