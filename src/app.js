@@ -8,6 +8,7 @@ const inventoryRoutes = require('./routes/inventoryRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 const financeRoutes = require('./routes/financeRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const balanzaCodigosRoutes = require('./routes/balanzaCodigosRoutes');
 const { requireAuth } = require('./middleware/authMiddleware');
 
 const app = express();
@@ -33,7 +34,7 @@ app.use(cors({
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -65,6 +66,7 @@ app.use('/api/inventory', requireAuth, inventoryRoutes);
 app.use('/api/content', contentRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/analytics', requireAuth, analyticsRoutes);
+app.use('/api/balanza-codigos', balanzaCodigosRoutes);
 
 // Manejo de rutas no encontradas
 app.use((req, res) => {
